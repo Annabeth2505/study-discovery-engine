@@ -84,15 +84,16 @@ def fetch_sra_studies (search_term, max_results = 100, batch_size =100) :
 
 def fetch_runs_for_bioproject(sra_id):
     """ 
-    Fetch al runs for a given SRA study ID and return as DataFrame. 
+    Fetch all runs for a given SRA study ID and return as DataFrame. 
     
     Args:
         sra_id : NCBI internal numeric ID for the study
-        Returns:
-            DataFrame of runs or None if fetch failed. 
+    Returns:
+        DataFrame of runs or None if fetch failed. 
     """
 
     try:
+        # step 1: fetch single run to get BioProject accession
         fetch_handle = Entrez.efetch(
             db = 'sra',
             id = sra_id,
@@ -104,12 +105,50 @@ def fetch_runs_for_bioproject(sra_id):
         fetch_handle.close()
 
         decoded = data.decode('utf-8')
-        df = pd.read_csv(io.StringIO(decoded))
-        df = df.dropna(subset = ['Run'])
-        time.sleep(0.3)  # Be respectful of NCBI servers
-        return df 
-    
-    except Exception as e:
-        print(f"Error fetching runs for SRA ID {sra_id}: {e}") 
-        return None
+        single_run_df = pd.read_csv(io.StringIO(decoded))
+        single_run_df = single_run_df.dropna(subset = ['Run'])
 
+        if len(single_run_df) == 0:
+            print(f"No runs found for SRA ID {sra_id}")
+            return None
+        
+        # step 2 - get the BioProject accession 
+        bioproject = single_run_df['BioProject'].iloc[0]
+
+        # step 3 - fetch all runs for the BioProject
+        handle = Entrez.esearch(
+            db = 'sra',
+            term = f'"{bioproject}"[BioProject]',
+            retmax = 1000
+        )
+        record = Entrez.read(handle)
+        handle.close()
+        time.sleep(0.5)
+
+        all_ids = record['IdList']
+
+        if not all_ids:
+            return single_run_df 
+        
+        # step 4 - fetch all runs for the BioProject
+        ids_string = ','.join(all_ids)
+        fetch_handle = Entrez.efetch(
+            db = 'sra',
+            id = ids_string,
+            rettype = 'runinfo',
+            retmode = 'text'
+        )
+        data = fetch_handle.read()
+        fetch_handle.close()
+
+        decoded = data.decode('utf-8')
+        runs_df = pd.read_csv(io.StringIO(decoded))
+        runs_df = runs_df.dropna(subset = ['Run'])
+        time.sleep(0.3)
+
+    except Exception as e:
+        print(f"Error fetching runs for SRA ID {sra_id}: {e}")
+        
+    
+    return runs_df
+    
