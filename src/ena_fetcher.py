@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import time 
+from Bio import Entrez
 
 ENA_PORTAL_URL = "https://www.ebi.ac.uk/ena/portal/api/search"
 
@@ -73,7 +74,9 @@ def fetch_runs_for_study(study_accession):
     params = {
         "result": "read_run",
         "query": f'study_accession="{study_accession}"',
-        "fields": "run_accession,study_accession,sample_accession,scientific_name,host,library_strategy,fastq_ftp",
+        "fields": "run_accession,study_accession,sample_accession,scientific_name,host,library_strategy,fastq_ftp,\
+        host_scientific_name,host_tax_id,host_body_site,disease,country,lat,lon,collection_date\
+        ,library_strategy",
         "limit": 1000,
         "format": "json"
     }
@@ -97,29 +100,118 @@ def fetch_runs_for_study(study_accession):
         return None
 
 
+
+
 def resolve_host_species(runs_df):
-    """ 
-    Resolve the best available host species from a runs DataFrame.
-
-    scientific_name is often generic like "gut metagenome" but host field contains
-    the actual host species. This function falls back to host field whenscientific_name
-    is uninformative. 
-
-    Args:
-        runs_df: DataFrame of runs for a single study 
-    Returns:
-        host_species string or None is not determinable 
     """
+    Resolve the best available host species from a runs DataFrame.
+    Checks host_scientific_name first, then host, then scientific_name.
+    """
+    generic_terms = [
+        "metagenome", "gut metagenome", "microbial mat metagenome",
+        "soil metagenome", "food metagenome", "environmental metagenome",
+        "marine metagenome", "freshwater metagenome", "human gut metagenome",
+        "mouse gut metagenome", "bovine gut metagenome"
+    ]
 
+    # try host_scientific_name first
+    if "host_scientific_name" in runs_df.columns:
+        hosts = runs_df["host_scientific_name"].dropna()
+        hosts = hosts[hosts != ""]
+        if len(hosts) > 0:
+            return hosts.mode()[0]
+
+    # try host field next if not found in host_scientific_name 
+    if "host" in runs_df.columns:
+        hosts = runs_df["host"].dropna()
+        hosts = hosts[hosts != ""]
+        if len(hosts) > 0:
+            return hosts.mode()[0]
+
+    # fall back to scientific_name if not generic
     sci_names = runs_df["scientific_name"].dropna()
-    sci_name = sci_names.mode()[0] if len(sci_names) > 0 else None 
-
-    if sci_name and sci_name.lower() not in [g.lower() for g in GENERIC_SCIENTIFIC_NAMES]:
-        return sci_name 
-
-    hosts = runs_df["host"].dropna()
-    hosts = hosts[hosts != ""]
-    if len(hosts) > 0:
-        return hosts.mode()[0]
+    sci_name = sci_names.mode()[0] if len(sci_names) > 0 else None
+    if sci_name and sci_name.lower() not in [g.lower() for g in generic_terms]:
+        return sci_name
 
     return None
+
+def fetch_pubmed_id(study_accession):
+    """
+    Search PubMed for a paper associated with a study accession.
+    """
+    try:
+        handle = Entrez.esearch(
+            db="pubmed",
+            term=f"{study_accession}[All Fields]",
+            retmax=1
+        )
+        record = Entrez.read(handle)
+        handle.close()
+        
+        if record["IdList"]:
+            return record["IdList"][0]
+        return None
+        
+    except Exception as e:
+        print(f"Error fetching PubMed ID for {study_accession}: {e}")
+        return None
+    
+    
+
+def fetch_study_origin(study_accession):
+    """ 
+    Fetches the origin of the study. """
+
+    origin = {
+        "accession": study_accession,
+        "source": "ENA" if study_accession.startswith("PRJEB") else "NCBI",
+        "title": None, 
+        "description": None,
+    }
+
+    params = {
+        "result": "study",
+        "query": f'study_accession="{study_accession}"',
+        "fields": "study_accession,study_title,study_description,pubmed_id",
+        "limit": 1,
+        "format": "json"
+    }
+
+    try:
+        response = requests.get(ENA_PORTAL_URL, params = params, timeout = 30)
+        if response.status_code == 200 and response.json():
+            data = response.json()[0]
+            origin["title"] = data.get("study_title")
+            origin["description"] = data.get("study_description")
+        time.sleep(0.3)
+
+    except Exception as e:
+        print(f'Error fetching study origin for {study_accession}: {e}')
+    return origin
+
+
+
+def fetch_pubmed_abstract(study_accession):
+    """ 
+    Fetches the abstract of a PubMed paper given its study accession. 
+    """
+    
+    try:
+        pubmed_id = fetch_pubmed_id(study_accession)
+        
+        if pubmed_id is None:
+            return None
+        
+        handle = Entrez.efetch(
+            db = 'pubmed',
+            id = pubmed_id,
+            rettype = 'abstract',
+            retmode = 'text'
+        )
+        abstract = handle.read()
+        handle.close()
+        return abstract
+    except Exception as e:
+        print(f"No abstract found for PubMed ID {pubmed_id}: {e}")
+    return None 
