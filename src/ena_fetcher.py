@@ -158,28 +158,27 @@ def fetch_pubmed_id(study_accession):
         return None
     
     
-
 def fetch_study_origin(study_accession):
-    """ 
-    Fetches the origin of the study. """
-
+    """
+    Fetches the origin of the study.
+    """
     origin = {
         "accession": study_accession,
         "source": "ENA" if study_accession.startswith("PRJEB") else "NCBI",
-        "title": None, 
+        "title": None,
         "description": None,
     }
 
     params = {
         "result": "study",
         "query": f'study_accession="{study_accession}"',
-        "fields": "study_accession,study_title,study_description,pubmed_id",
+        "fields": "study_accession,study_title,study_description",
         "limit": 1,
         "format": "json"
     }
 
     try:
-        response = requests.get(ENA_PORTAL_URL, params = params, timeout = 30)
+        response = requests.get(ENA_PORTAL_URL, params=params, timeout=30)
         if response.status_code == 200 and response.json():
             data = response.json()[0]
             origin["title"] = data.get("study_title")
@@ -187,11 +186,51 @@ def fetch_study_origin(study_accession):
         time.sleep(0.3)
 
     except Exception as e:
-        print(f'Error fetching study origin for {study_accession}: {e}')
+        print(f"Error fetching ENA metadata for {study_accession}: {e}")
+
+
+    # fallback to NCBI if title still None
+    if origin["title"] is None:
+        try:
+            handle = Entrez.esearch(
+                db="bioproject",
+                term=f"{study_accession}[Project Accession]",
+                retmax=1
+            )
+            record = Entrez.read(handle)
+            handle.close()
+
+            if record["IdList"]:
+                fetch_handle = Entrez.efetch(
+                    db="bioproject",
+                    id=record["IdList"][0],
+                    rettype="xml",
+                    retmode="xml"
+                )
+                import xml.etree.ElementTree as ET
+                xml_data = fetch_handle.read()
+                fetch_handle.close()
+                root = ET.fromstring(xml_data)
+
+                title_elem = root.find(".//ProjectDescr/Title") 
+
+                # look specifically in ProjectDescr for the title
+                title = root.find(".//ProjectDescr/Title")
+                description = root.find(".//ProjectDescr/Description")
+
+                if title is not None:
+                    origin["title"] = title.text
+                if description is not None:
+                    origin["description"] = description.text
+                
+            time.sleep(0.3)
+
+        except Exception as e:
+            print(f"Error fetching NCBI title for {study_accession}: {e}")
+
     return origin
 
-
-
+    
 def fetch_pubmed_abstract(study_accession):
     """ 
     Fetches the abstract of a PubMed paper given its study accession. 
