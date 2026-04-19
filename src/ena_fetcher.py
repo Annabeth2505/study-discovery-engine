@@ -12,55 +12,38 @@ GENERIC_SCIENTIFIC_NAMES = [
     "mouse gut metagenome", "bovine gut metagenome"
 ]
 
-def search_ena_studies(query, max_results=100): 
-    """ 
-    Search ENA for studies matching a query. 
-
-    Args:
-        query: ENA search query string
-        max_results: maximum number of studies to return 
-
-    Returns:
-        list of unique study accessions 
+def search_ena_studies(query, max_results=100):
     """
+    Search ENA for studies matching a query.
+    Returns list of unique study accessions.
+    """
+    params = {
+        "result": "read_run",
+        "query": query,
+        "fields": "study_accession",
+        "limit": max_results * 10,  # request more runs to get enough unique studies
+        "format": "json"
+    }
 
-    all_accessions = set()
-    offset = 0 
-    batch_size = 500
+    try:
+        response = requests.get(ENA_PORTAL_URL, params=params, timeout=30)
+        if response.status_code != 200:
+            print(f"ENA search failed: {response.status_code}")
+            return []
 
-    while len(all_accessions) < max_results: 
-        params = {
-            "result": "read_run",
-            "query": query,
-            "fields": "study_accession",
-            "limit": batch_size,
-            "offset": offset,
-            "format": "json"
-        }
+        data = response.json()
+        if not data:
+            return []
 
-        try:
-            response = requests.get(ENA_PORTAL_URL, params = params, timeout = 30)
-            if response.status_code != 200:
-                print(f'ENA search failed: {response.status_code}')
-                break 
+        accessions = list({record["study_accession"] for record in data})
+        print(f"Found {len(data)} runs, {len(accessions)} unique studies")
+        time.sleep(0.3)
+        return accessions[:max_results]
 
-            data = response.json()
-            if not data:
-                break 
-
-            for record in data:
-                all_accessions.add(record['study_accession'])
-
-            if len(data) < batch_size:
-                break 
-
-            offset += batch_size 
-            time.sleep(0.3)
-
-        except Exception as e:
-            print(f'Error searching ENA: {e}')
-            break 
-
+    except Exception as e:
+        print(f"Error searching ENA: {e}")
+        return []
+    
 def fetch_runs_for_study(study_accession):
     """  
     Fetch all runs for a study from ENA. 
